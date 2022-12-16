@@ -520,7 +520,7 @@ func (c *consumer) Nack(msg Message) {
 		}
 
 		if mid.consumer != nil {
-			mid.Nack()
+			mid.NackByMsg(msg)
 			return
 		}
 		c.consumers[mid.partitionIdx].NackMsg(msg)
