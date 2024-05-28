@@ -23,13 +23,13 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"time"
 
-	"github.com/apache/pulsar-client-go/pulsar/internal/auth"
+	"github.com/apache/pulsar-client-go/pulsar/auth"
 
 	"github.com/apache/pulsar-client-go/pulsar/log"
 
@@ -47,7 +47,7 @@ type httpClient struct {
 
 func (c *httpClient) Close() {
 	if c.HTTPClient != nil {
-		CloseIdleConnections(c.HTTPClient)
+		c.HTTPClient.CloseIdleConnections()
 	}
 }
 
@@ -173,6 +173,7 @@ func (c *httpClient) GetWithQueryParams(endpoint string, obj interface{}, params
 	return c.GetWithOptions(endpoint, obj, params, decode, nil)
 }
 
+//nolint:bodyclose // false positive
 func (c *httpClient) GetWithOptions(endpoint string, obj interface{}, params map[string]string,
 	decode bool, file io.Writer) ([]byte, error) {
 
@@ -189,7 +190,9 @@ func (c *httpClient) GetWithOptions(endpoint string, obj interface{}, params map
 		req.params = query
 	}
 
-	resp, err := checkSuccessful(c.doRequest(req))
+	doRequest, err := c.doRequest(req)
+	defer safeRespClose(doRequest)
+	resp, err := checkSuccessful(doRequest, err)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +212,7 @@ func (c *httpClient) GetWithOptions(endpoint string, obj interface{}, params map
 				return nil, err
 			}
 		} else {
-			body, err := ioutil.ReadAll(resp.Body)
+			body, err := io.ReadAll(resp.Body)
 			if err != nil {
 				return nil, err
 			}
@@ -311,7 +314,7 @@ func safeRespClose(resp *http.Response) {
 // responseError is used to parse a response into a client error
 func responseError(resp *http.Response) error {
 	var e error
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	reason := ""
 	code := resp.StatusCode
 	if err != nil {
@@ -336,9 +339,12 @@ func getDefaultTransport(tlsConfig *TLSOptions) (http.RoundTripper, error) {
 	if tlsConfig != nil {
 		cfg := &tls.Config{
 			InsecureSkipVerify: tlsConfig.AllowInsecureConnection,
+			CipherSuites:       tlsConfig.CipherSuites,
+			MinVersion:         tlsConfig.MinVersion,
+			MaxVersion:         tlsConfig.MaxVersion,
 		}
 		if len(tlsConfig.TrustCertsFilePath) > 0 {
-			rootCA, err := ioutil.ReadFile(tlsConfig.TrustCertsFilePath)
+			rootCA, err := os.ReadFile(tlsConfig.TrustCertsFilePath)
 			if err != nil {
 				return nil, err
 			}

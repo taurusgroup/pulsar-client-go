@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"path"
 	"strings"
@@ -110,7 +109,7 @@ func httpDo(method string, requestPath string, in interface{}, out interface{}) 
 	}
 
 	if out != nil {
-		outBytes, err := ioutil.ReadAll(resp.Body)
+		outBytes, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return err
 		}
@@ -158,6 +157,13 @@ func topicStats(topic string) (map[string]interface{}, error) {
 	return metadata, err
 }
 
+func transactionStats(id *TxnID) (map[string]interface{}, error) {
+	var metadata map[string]interface{}
+	path := fmt.Sprintf("admin/v3/transactions/transactionMetadata/%d/%d", id.MostSigBits, id.LeastSigBits)
+	err := httpGet(path, &metadata)
+	return metadata, err
+}
+
 func topicPath(topic string) string {
 	tn, _ := internal.ParseTopicName(topic)
 	idx := strings.LastIndex(tn.Name, "/")
@@ -171,9 +177,14 @@ func retryAssert(t assert.TestingT, times int, milliseconds int, update func(), 
 	for i := 0; i < times; i++ {
 		time.Sleep(time.Duration(milliseconds) * time.Millisecond)
 		update()
-		if assert(nil) {
+		if assert(fakeAssertT{}) {
 			break
 		}
 	}
 	assert(t)
+}
+
+type fakeAssertT struct{}
+
+func (fa fakeAssertT) Errorf(format string, args ...interface{}) {
 }

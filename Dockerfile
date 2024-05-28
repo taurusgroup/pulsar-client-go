@@ -1,4 +1,3 @@
-#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,19 +14,22 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-#
 
 # Explicit version of Pulsar and Golang images should be
 # set via the Makefile or CLI
 ARG PULSAR_IMAGE=apachepulsar/pulsar:latest
-ARG GOLANG_IMAGE=golang:latest
+FROM $PULSAR_IMAGE
+USER root
+ARG GO_VERSION=1.18
+ARG ARCH=amd64
 
-FROM $PULSAR_IMAGE as pulsar
-FROM $GOLANG_IMAGE
+RUN curl -L https://dl.google.com/go/go${GO_VERSION}.linux-${ARCH}.tar.gz -o golang.tar.gz && \
+    mkdir -p /pulsar/go && tar -C /pulsar -xzf golang.tar.gz
 
-RUN apt-get update && apt-get install -y openjdk-11-jre-headless ca-certificates
+ENV PATH /pulsar/go/bin:$PATH
 
-COPY --from=pulsar /pulsar /pulsar
+RUN apt-get update && apt-get install -y git && apt-get install -y gcc
+
 
 ### Add pulsar config
 COPY integration-tests/certs /pulsar/certs
@@ -37,4 +39,19 @@ COPY integration-tests/conf/.htpasswd \
      integration-tests/conf/standalone.conf \
      /pulsar/conf/
 
+COPY . /pulsar/pulsar-client-go
+
 ENV PULSAR_EXTRA_OPTS="-Dpulsar.auth.basic.conf=/pulsar/conf/.htpasswd"
+
+WORKDIR /pulsar/pulsar-client-go
+
+ENV GOPATH=/pulsar/go
+ENV GOCACHE=/tmp/go-cache
+
+# Install dependencies
+RUN go mod download
+
+# Basic compilation
+RUN go build ./pulsar
+RUN go build ./pulsaradmin
+RUN go build -o bin/pulsar-perf ./perf
