@@ -1311,6 +1311,8 @@ func (p *partitionProducer) internalSendAsync(
 	callback func(MessageID, *ProducerMessage, error),
 	flushImmediately bool,
 ) {
+	p.log.Infof("[debug-flake] producer.internalSendAsync: ENQUEUE topic=%s producerName=%s payloadSize=%d flushImmediately=%v",
+		p.topic, p.producerName, len(msg.Payload), flushImmediately)
 	if err := p.validateMsg(msg); err != nil {
 		p.log.Error(err)
 		runCallback(callback, nil, msg, err)
@@ -1383,6 +1385,10 @@ func (p *partitionProducer) internalSendAsync(
 }
 
 func (p *partitionProducer) ReceivedSendReceipt(response *pb.CommandSendReceipt) {
+	p.log.Infof("[debug-flake] producer.ReceivedSendReceipt: BROKER ACK topic=%s producerName=%s msgID=%d:%d sequenceID=%d",
+		p.topic, p.producerName,
+		response.GetMessageId().GetLedgerId(), response.GetMessageId().GetEntryId(),
+		response.GetSequenceId())
 	pi, ok := p.pendingQueue.Peek().(*pendingItem)
 
 	if !ok {

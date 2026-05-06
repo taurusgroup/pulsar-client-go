@@ -183,7 +183,7 @@ type partitionConsumer struct {
 	dlq         *dlqRouter
 
 	log                  log.Logger
-	compressionProviders sync.Map //map[pb.CompressionType]compression.Provider
+	compressionProviders sync.Map // map[pb.CompressionType]compression.Provider
 	metrics              *internal.LeveledMetrics
 	decryptor            cryptointernal.Decryptor
 	schemaInfoCache      *schemaInfoCache
@@ -219,6 +219,8 @@ func (pc *partitionConsumer) Topic() string {
 }
 
 func (pc *partitionConsumer) ActiveConsumerChanged(isActive bool) {
+	pc.log.Infof("[debug-flake] ActiveConsumerChanged: isActive=%v consumerID=%d topic=%s subscription=%s",
+		isActive, pc.consumerID, pc.topic, pc.options.subscription)
 	listener := pc.options.consumerEventListener
 	if listener == nil {
 		// didn't set a listener
@@ -1185,6 +1187,11 @@ func (pc *partitionConsumer) internalAckList(request *ackListRequest) {
 
 func (pc *partitionConsumer) MessageReceived(response *pb.CommandMessage, headersAndPayload internal.Buffer) error {
 	pbMsgID := response.GetMessageId()
+	if pc.log != nil {
+		pc.log.Infof("[debug-flake] MessageReceived: msgID=%d:%d redeliveryCount=%d consumerID=%d topic=%s",
+			pbMsgID.GetLedgerId(), pbMsgID.GetEntryId(), response.GetRedeliveryCount(),
+			pc.consumerID, pc.topic)
+	}
 
 	reader := internal.NewMessageReader(headersAndPayload)
 	brokerMetadata, err := reader.ReadBrokerMetadata()
@@ -1544,6 +1551,8 @@ func createEncryptionContext(msgMeta *pb.MessageMetadata) *EncryptionContext {
 
 func (pc *partitionConsumer) ConnectionClosed(closeConsumer *pb.CommandCloseConsumer) {
 	// Trigger reconnection in the consumer goroutine
+	pc.log.Infof("[debug-flake] ConnectionClosed: triggering reconnect consumerID=%d topic=%s",
+		pc.consumerID, pc.topic)
 	pc.log.Debug("connection closed and send to connectClosedCh")
 	pc.reconnectCount.Inc()
 	var assignedBrokerURL string
@@ -1569,6 +1578,8 @@ func (pc *partitionConsumer) SetRedirectedClusterURI(redirectedClusterURI string
 // before the application is ready to consume them. After the consumer is ready,
 // the client needs to give permission to the broker to push messages.
 func (pc *partitionConsumer) internalFlow(permits uint32) error {
+	pc.log.Infof("[debug-flake] internalFlow: requesting permits=%d consumerID=%d topic=%s",
+		permits, pc.consumerID, pc.topic)
 	if state := pc.getConsumerState(); state == consumerClosed || state == consumerClosing {
 		pc.log.WithField("state", state).Error("Failed to redeliver closing or closed consumer")
 		return errors.New("consumer closing or closed")
@@ -1657,6 +1668,8 @@ func (pc *partitionConsumer) dispatcher() {
 			if !ok {
 				return
 			}
+			pc.log.Infof("[debug-flake] dispatcher: received connectedCh; dropping pending=%d messages, will reset permits consumerID=%d topic=%s",
+				len(messages), pc.consumerID, pc.topic)
 			pc.log.Debug("dispatcher received connection event")
 
 			messages = nil
@@ -1810,6 +1823,8 @@ func (pc *partitionConsumer) runEventsLoop() {
 			pc.log.Info("close consumer, exit reconnect")
 			return
 		case connectionClosed := <-pc.connectClosedCh:
+			pc.log.Infof("[debug-flake] runEventsLoop: received connectionClosed, will reconnect consumerID=%d topic=%s",
+				pc.consumerID, pc.topic)
 			pc.log.Debug("runEventsLoop will reconnect")
 			pc.reconnectToBroker(connectionClosed)
 		case event := <-pc.eventsCh:
@@ -1982,6 +1997,8 @@ func (pc *partitionConsumer) lookupTopic(brokerServiceURL string) (*internal.Loo
 }
 
 func (pc *partitionConsumer) grabConn(assignedBrokerURL string) error {
+	pc.log.Infof("[debug-flake] grabConn: ENTER assignedBrokerURL=%q reconnectCount=%d consumerID=%d topic=%s subscription=%s",
+		assignedBrokerURL, pc.reconnectCount.Load(), pc.consumerID, pc.topic, pc.options.subscription)
 	lr, err := pc.lookupTopic(assignedBrokerURL)
 	if err != nil {
 		return err
@@ -2069,6 +2086,7 @@ func (pc *partitionConsumer) grabConn(assignedBrokerURL string) error {
 		prevConn = *v
 	}
 	pc._setConn(cnx)
+	pc.log.Infof("[debug-flake] grabConn: connection set on pc.conn consumerID=%d", pc.consumerID)
 
 	// restoreConn rolls back pc.conn to the previous connection (or nil on
 	// the very first call) so a failed subscribe attempt doesn't leave
@@ -2088,6 +2106,7 @@ func (pc *partitionConsumer) grabConn(assignedBrokerURL string) error {
 		pc.log.WithError(err).Error("Failed to add consumer handler")
 		return err
 	}
+	pc.log.Infof("[debug-flake] grabConn: handler registered, sending SUBSCRIBE consumerID=%d", pc.consumerID)
 
 	res, err := pc.client.rpcClient.RequestOnCnx(cnx, requestID, pb.BaseCommand_SUBSCRIBE, cmdSubscribe)
 	if err != nil {
@@ -2116,9 +2135,12 @@ func (pc *partitionConsumer) grabConn(assignedBrokerURL string) error {
 
 	switch msgType {
 	case pb.BaseCommand_SUCCESS:
+		pc.log.Infof("[debug-flake] grabConn: SUBSCRIBE success, will signal connectedCh consumerID=%d", pc.consumerID)
 		// notify the dispatcher we have connection
 		go func() {
+			pc.log.Infof("[debug-flake] grabConn: sending to connectedCh consumerID=%d", pc.consumerID)
 			pc.connectedCh <- struct{}{}
+			pc.log.Infof("[debug-flake] grabConn: connectedCh accepted consumerID=%d", pc.consumerID)
 		}()
 		return nil
 	case pb.BaseCommand_ERROR:
