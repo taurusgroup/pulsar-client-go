@@ -846,7 +846,7 @@ func (c *consumer) setLastDequeuedMsg(msgID MessageID) error {
 	if err != nil {
 		return err
 	}
-	consumer.lastDequeuedMsg = toTrackingMessageID(msgID)
+	consumer.lastDequeuedMsg.set(toTrackingMessageID(msgID))
 	return nil
 }
 

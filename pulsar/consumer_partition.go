@@ -213,7 +213,11 @@ type partitionConsumer struct {
 	maxQueueSize    int32
 	queueCh         chan []*message
 	startMessageID  atomicMessageID
-	lastDequeuedMsg *trackingMessageID
+	// Written by the application goroutine via consumer.setLastDequeuedMsg
+	// (reader.Next) and read by this consumer's own events loop during
+	// reconnect (clearReceiverQueue) and seek, so it needs the same guard
+	// startMessageID already has.
+	lastDequeuedMsg atomicMessageID
 
 	// This is used to track the seeking message id during the seek operation.
 	// It will be set to nil after seek completes and reconnected.
@@ -1097,7 +1101,7 @@ func (pc *partitionConsumer) requestSeek(msgID *messageID) error {
 	//    we can safely clear the messages in the queue (at this point, it won't contain messages after the seek).
 	// 2. The startMessageID is reset to ensure accurate judgment when calling hasNext next time.
 	//    Since the messages in the queue are cleared here reconnection won't reset startMessageId.
-	pc.lastDequeuedMsg = nil
+	pc.lastDequeuedMsg.set(nil)
 	pc.seekMessageID.set(toTrackingMessageID(msgID))
 	pc.clearQueueAndGetNextMessage()
 	return nil
@@ -1171,7 +1175,7 @@ func (pc *partitionConsumer) internalSeekByTime(seek *seekByTimeRequest) {
 		seek.err = err
 		return
 	}
-	pc.lastDequeuedMsg = nil
+	pc.lastDequeuedMsg.set(nil)
 	pc.hasSoughtByTime.Store(true)
 	pc.clearQueueAndGetNextMessage()
 }
@@ -2386,10 +2390,10 @@ func (pc *partitionConsumer) clearReceiverQueue() *trackingMessageID {
 
 	if nextMessageInQueue != nil {
 		return getPreviousMessage(nextMessageInQueue)
-	} else if pc.lastDequeuedMsg != nil {
+	} else if lastDequeued := pc.lastDequeuedMsg.get(); lastDequeued != nil {
 		// If the queue was empty we need to restart from the message just after the last one that has been dequeued
 		// in the past
-		return pc.lastDequeuedMsg
+		return lastDequeued
 	}
 	// No message was received or dequeued by this consumer. Next message would still be the startMessageId
 	return pc.startMessageID.get()
@@ -2550,7 +2554,7 @@ func (pc *partitionConsumer) hasNext() bool {
 	// If a seek by time has been performed, then the `startMessageId` becomes irrelevant.
 	// We need to compare `markDeletePosition` and `lastMessageId`,
 	// and then reset `startMessageID` to `markDeletePosition`.
-	if pc.lastDequeuedMsg == nil && pc.hasSoughtByTime.CompareAndSwap(true, false) {
+	if pc.lastDequeuedMsg.get() == nil && pc.hasSoughtByTime.CompareAndSwap(true, false) {
 		res, err := pc.getLastMessageIDAndMarkDeletePosition()
 		if err != nil {
 			pc.log.WithError(err).Error("Failed to get last message id")
@@ -2579,8 +2583,8 @@ func (pc *partitionConsumer) hasNext() bool {
 }
 
 func (pc *partitionConsumer) hasMoreMessages() bool {
-	if pc.lastDequeuedMsg != nil {
-		return pc.lastMessageInBroker.isEntryIDValid() && pc.lastMessageInBroker.greater(pc.lastDequeuedMsg.messageID)
+	if lastDequeued := pc.lastDequeuedMsg.get(); lastDequeued != nil {
+		return pc.lastMessageInBroker.isEntryIDValid() && pc.lastMessageInBroker.greater(lastDequeued.messageID)
 	}
 
 	if pc.options.startMessageIDInclusive {
